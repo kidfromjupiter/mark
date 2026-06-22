@@ -10,7 +10,7 @@ HEIGHT = 555
 
 
 def normalise_img(img: cv2.typing.MatLike) -> cv2.typing.MatLike | None:
-
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
     params = cv2.aruco.DetectorParameters()
     detector = cv2.aruco.ArucoDetector(aruco_dict, params)
@@ -22,7 +22,7 @@ def normalise_img(img: cv2.typing.MatLike) -> cv2.typing.MatLike | None:
         2: "BL"   # Bottom-Left Marker ID
     }
 
-    corners, ids, _ = detector.detectMarkers(img)
+    corners, ids, _ = detector.detectMarkers(gray)
     
     if ids is not None and len(ids) >= 4:
         # Flatten IDs for easier mapping
