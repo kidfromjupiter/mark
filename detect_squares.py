@@ -12,12 +12,13 @@ MAX_AREA = 2600
 LOWER_MARGIN = 480
 UPPER_MARGIN = 140
 
-RECTANGULARITY_THRESHOLD = 0.5
+RECTANGULARITY_THRESHOLD = 0.35
 RECOVERY_MIN_PASSED = 5
 RECOVERY_WIDTH_TOL = 0.05
 RECOVERY_HEIGHT_TOL = 0.25
 RECOVERY_AREA_TOL = 0.30
 RECOVERY_MAX_IOU = 0.30
+
 
 @dataclass
 class CandidateBox:
@@ -26,40 +27,50 @@ class CandidateBox:
     w: int
     h: int
 
+
 @dataclass
 class InspectionLog:
     """Stores the bounding box and failure reason for EVERY detected contour."""
+
     x: int
     y: int
     w: int
     h: int
     reason: str  # "PASSED" or why it failed
 
+
 # Global tracking variables for mouse callbacks
 mouse_x, mouse_y = -1, -1
 last_hovered_reason = None
+
 
 def mouse_hover_callback(event, x, y, flags, param):
     global mouse_x, mouse_y, last_hovered_reason
     if event == cv2.EVENT_MOUSEMOVE:
         mouse_x, mouse_y = x, y
-        
+
         # Look through our inspection history logs (passed via 'param')
         inspection_history = param
         found_hover = False
-        
+
         for item in inspection_history:
             # Check if mouse is inside this specific contour's bounding rect
-            if item.x <= mouse_x <= (item.x + item.w) and item.y <= mouse_y <= (item.y + item.h):
+            if item.x <= mouse_x <= (item.x + item.w) and item.y <= mouse_y <= (
+                item.y + item.h
+            ):
                 found_hover = True
                 # Only print if it's a NEW reason to prevent terminal spamming
                 if last_hovered_reason != item.reason:
-                    print(f"Hover Box at ({item.x}, {item.y}) -> Status/Failure: {item.reason}")
+                    print(
+                        f"Hover Box at ({item.x}, {item.y}) -> Status/Failure: {item.reason}"
+                    )
                     last_hovered_reason = item.reason
                 break
-        
+
         if not found_hover:
             last_hovered_reason = None
+
+
 def box_iou(a, b):
     ax1, ay1 = a.x, a.y
     ax2, ay2 = a.x + a.w, a.y + a.h
@@ -82,6 +93,8 @@ def box_iou(a, b):
         return 0.0
 
     return intersection / union
+
+
 def find_answer_boxes(warped, debug=False):
 
     gray = cv2.cvtColor(warped, cv2.COLOR_BGR2GRAY)
@@ -192,9 +205,7 @@ def find_answer_boxes(warped, debug=False):
 
         # Fail check 2: Aspect Ratio
         if h == 0:
-            inspection_history.append(
-                InspectionLog(x, y, w, h, "Failed Zero Height")
-            )
+            inspection_history.append(InspectionLog(x, y, w, h, "Failed Zero Height"))
             continue
 
         aspect = w / float(h)
@@ -248,9 +259,7 @@ def find_answer_boxes(warped, debug=False):
 
         candidates.append(box)
 
-        inspection_history.append(
-            InspectionLog(x, y, w, h, "PASSED")
-        )
+        inspection_history.append(InspectionLog(x, y, w, h, "PASSED"))
 
     # Second pass:
     # Recover boxes that failed only rectangularity but match the normal box size.
@@ -280,8 +289,7 @@ def find_answer_boxes(warped, debug=False):
             area_ok = area_diff <= RECOVERY_AREA_TOL
 
             overlaps_existing = any(
-                box_iou(b, existing) > RECOVERY_MAX_IOU
-                for existing in candidates
+                box_iou(b, existing) > RECOVERY_MAX_IOU for existing in candidates
             )
 
             if width_ok and height_ok and area_ok and not overlaps_existing:
@@ -342,6 +350,7 @@ def find_answer_boxes(warped, debug=False):
         cv2.destroyAllWindows()
 
     return sorted(candidates, key=lambda r: (r.x, r.y))
+
 
 if __name__ == "__main__":
     img = cv2.imread("dataset/uncompressed/22.jpg")
