@@ -73,6 +73,56 @@ def mouse_hover_callback(event, x, y, flags, param):
             last_hovered_reason = None
 
 
+def refine_box_from_dirty_contour(th_clean, dirty_box):
+    x, y, w, h = dirty_box
+
+    pad = 4
+    x1 = max(0, x - pad)
+    y1 = max(0, y - pad)
+    x2 = min(th_clean.shape[1], x + w + pad)
+    y2 = min(th_clean.shape[0], y + h + pad)
+
+    roi = th_clean[y1:y2, x1:x2]
+
+    # Extract long printed horizontal lines
+    horizontal_kernel = cv2.getStructuringElement(
+        cv2.MORPH_RECT, (max(20, int(w * 0.45)), 1)
+    )
+    horizontal = cv2.morphologyEx(roi, cv2.MORPH_OPEN, horizontal_kernel, iterations=1)
+
+    # Extract long printed vertical lines
+    vertical_kernel = cv2.getStructuringElement(
+        cv2.MORPH_RECT, (1, max(10, int(h * 0.55)))
+    )
+    vertical = cv2.morphologyEx(roi, cv2.MORPH_OPEN, vertical_kernel, iterations=1)
+
+    # Row/column projections
+    row_score = np.sum(horizontal > 0, axis=1)
+    col_score = np.sum(vertical > 0, axis=0)
+
+    # Require meaningful line evidence
+    row_threshold = max(5, int(w * 0.35))
+    col_threshold = max(5, int(h * 0.35))
+
+    rows = np.where(row_score > row_threshold)[0]
+    cols = np.where(col_score > col_threshold)[0]
+
+    if len(rows) < 2 or len(cols) < 2:
+        return None
+
+    top = rows.min()
+    bottom = rows.max()
+    left = cols.min()
+    right = cols.max()
+
+    refined_x = x1 + left
+    refined_y = y1 + top
+    refined_w = right - left
+    refined_h = bottom - top
+
+    return CandidateBox(refined_x, refined_y, refined_w, refined_h)
+
+
 def box_iou(a, b):
     ax1, ay1 = a.x, a.y
     ax2, ay2 = a.x + a.w, a.y + a.h
@@ -286,6 +336,12 @@ def find_answer_boxes(warped, debug=False):
             )
             continue
 
+        refined = refine_box_from_dirty_contour(th_clean, (x, y, w, h))
+
+        if refined is not None:
+            box = refined
+            x, y, w, h = box.x, box.y, box.w, box.h
+
         passed_candidates.append(box)
 
         inspection_history.append(InspectionLog(x, y, w, h, "PASSED"))
@@ -390,6 +446,6 @@ def find_answer_boxes(warped, debug=False):
 
 
 if __name__ == "__main__":
-    img = cv2.imread("dataset/uncompressed/60.jpg")
+    img = cv2.imread("dataset/uncompressed/61.jpg")
     warped = normalise_img(img)
     find_answer_boxes(warped, debug=True)
