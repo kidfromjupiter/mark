@@ -1,6 +1,8 @@
 from dataclasses import dataclass
+
 import cv2
 import numpy as np
+
 from warp import normalise_img
 
 MIN_W = 80
@@ -95,7 +97,33 @@ def box_iou(a, b):
     return intersection / union
 
 
+def normalize_box_to_size(box, target_w, target_h, image_w, image_h):
+    normalized_w = int(round(target_w))
+    normalized_h = int(round(target_h))
+
+    center_x = box.x + (box.w / 2.0)
+    center_y = box.y + (box.h / 2.0)
+
+    x = int(round(center_x - (normalized_w / 2.0)))
+    y = int(round(center_y - (normalized_h / 2.0)))
+
+    if normalized_w > image_w:
+        normalized_w = image_w
+        x = 0
+    else:
+        x = max(0, min(x, image_w - normalized_w))
+
+    if normalized_h > image_h:
+        normalized_h = image_h
+        y = 0
+    else:
+        y = max(0, min(y, image_h - normalized_h))
+
+    return CandidateBox(x, y, normalized_w, normalized_h)
+
+
 def find_answer_boxes(warped, debug=False):
+    image_h, image_w = warped.shape[:2]
 
     gray = cv2.cvtColor(warped, cv2.COLOR_BGR2GRAY)
 
@@ -160,6 +188,7 @@ def find_answer_boxes(warped, debug=False):
         cv2.waitKey(0)
         cv2.destroyAllWindows()
 
+    passed_candidates = []
     candidates = []
     rectangularity_failures = []
     inspection_history = []
@@ -257,7 +286,7 @@ def find_answer_boxes(warped, debug=False):
             )
             continue
 
-        candidates.append(box)
+        passed_candidates.append(box)
 
         inspection_history.append(InspectionLog(x, y, w, h, "PASSED"))
 
@@ -265,15 +294,21 @@ def find_answer_boxes(warped, debug=False):
     # Recover boxes that failed only rectangularity but match the normal box size.
     recovered = []
 
-    if len(candidates) >= RECOVERY_MIN_PASSED:
-        widths = np.array([b.w for b in candidates], dtype=np.float32)
-        heights = np.array([b.h for b in candidates], dtype=np.float32)
-        areas = np.array([b.w * b.h for b in candidates], dtype=np.float32)
+    if passed_candidates:
+        widths = np.array([b.w for b in passed_candidates], dtype=np.float32)
+        heights = np.array([b.h for b in passed_candidates], dtype=np.float32)
+        areas = np.array([b.w * b.h for b in passed_candidates], dtype=np.float32)
 
         med_w = float(np.median(widths))
         med_h = float(np.median(heights))
         med_area = float(np.median(areas))
 
+        candidates = [
+            normalize_box_to_size(b, med_w, med_h, image_w, image_h)
+            for b in passed_candidates
+        ]
+
+    if len(passed_candidates) >= RECOVERY_MIN_PASSED:
         for b in rectangularity_failures:
             area = b.w * b.h
 
@@ -288,20 +323,22 @@ def find_answer_boxes(warped, debug=False):
             height_ok = height_diff <= RECOVERY_HEIGHT_TOL
             area_ok = area_diff <= RECOVERY_AREA_TOL
 
+            adjusted_box = normalize_box_to_size(b, med_w, med_h, image_w, image_h)
             overlaps_existing = any(
-                box_iou(b, existing) > RECOVERY_MAX_IOU for existing in candidates
+                box_iou(adjusted_box, existing) > RECOVERY_MAX_IOU
+                for existing in candidates
             )
 
             if width_ok and height_ok and area_ok and not overlaps_existing:
-                candidates.append(b)
-                recovered.append(b)
+                candidates.append(adjusted_box)
+                recovered.append(adjusted_box)
 
                 inspection_history.append(
                     InspectionLog(
-                        b.x,
-                        b.y,
-                        b.w,
-                        b.h,
+                        adjusted_box.x,
+                        adjusted_box.y,
+                        adjusted_box.w,
+                        adjusted_box.h,
                         "RECOVERED: Failed rectangularity but matched median box size",
                     )
                 )
@@ -353,6 +390,6 @@ def find_answer_boxes(warped, debug=False):
 
 
 if __name__ == "__main__":
-    img = cv2.imread("dataset/uncompressed/22.jpg")
+    img = cv2.imread("dataset/uncompressed/60.jpg")
     warped = normalise_img(img)
     find_answer_boxes(warped, debug=True)
