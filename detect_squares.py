@@ -21,6 +21,11 @@ RECOVERY_HEIGHT_TOL = 0.25
 RECOVERY_AREA_TOL = 0.30
 RECOVERY_MAX_IOU = 0.30
 
+EXPECTED_GRID_ROWS = 10
+EXPECTED_GRID_COLS = 5
+INTERPOLATION_MIN_DETECTED = 40
+INTERPOLATION_MAX_IOU = 0.30
+
 
 @dataclass
 class CandidateBox:
@@ -172,16 +177,206 @@ def normalize_box_to_size(box, target_w, target_h, image_w, image_h):
     return CandidateBox(x, y, normalized_w, normalized_h)
 
 
+def cluster_axis(values, merge_gap):
+    values = sorted(float(v) for v in values)
+
+    if not values:
+        return []
+
+    clusters = [[values[0]]]
+
+    for v in values[1:]:
+        cluster_center = float(np.median(clusters[-1]))
+
+        if abs(v - cluster_center) <= merge_gap:
+            clusters[-1].append(v)
+        else:
+            clusters.append([v])
+
+    return [float(np.median(c)) for c in clusters]
+
+
+def complete_axis_positions(detected_positions, expected_count):
+    """
+    Converts detected row/column centers into a full expected set of centers.
+    Handles missing internal rows/columns by fitting a regular spacing.
+    """
+
+    detected_positions = sorted(float(v) for v in detected_positions)
+
+    if len(detected_positions) == expected_count:
+        return detected_positions
+
+    if len(detected_positions) < 2 or len(detected_positions) > expected_count:
+        return detected_positions
+
+    diffs = np.diff(detected_positions)
+    diffs = diffs[diffs > 1.0]
+
+    if len(diffs) == 0:
+        return detected_positions
+
+    # Use smaller gaps to avoid treating a missing slot gap as normal spacing.
+    cutoff = np.percentile(diffs, 60)
+    small_diffs = diffs[diffs <= cutoff]
+    spacing = float(np.median(small_diffs if len(small_diffs) else diffs))
+
+    best_positions = None
+    best_score = float("inf")
+
+    max_missing = expected_count - len(detected_positions)
+
+    for missing_before in range(max_missing + 1):
+        start = detected_positions[0] - (missing_before * spacing)
+        full_positions = [start + i * spacing for i in range(expected_count)]
+
+        used_slots = set()
+        score = 0.0
+        valid = True
+
+        for pos in detected_positions:
+            slot = int(round((pos - start) / spacing))
+
+            if slot < 0 or slot >= expected_count:
+                valid = False
+                break
+
+            if slot in used_slots:
+                valid = False
+                break
+
+            used_slots.add(slot)
+            score += abs(pos - full_positions[slot])
+
+        if valid and score < best_score:
+            best_score = score
+            best_positions = full_positions
+
+    return best_positions if best_positions is not None else detected_positions
+
+
+def interpolate_missing_grid_boxes(
+    candidates,
+    image_w,
+    image_h,
+    expected_rows=EXPECTED_GRID_ROWS,
+    expected_cols=EXPECTED_GRID_COLS,
+    min_detected=INTERPOLATION_MIN_DETECTED,
+):
+    expected_total = expected_rows * expected_cols
+
+    if len(candidates) < min_detected:
+        return candidates, []
+
+    if len(candidates) >= expected_total:
+        return candidates, []
+
+    widths = np.array([b.w for b in candidates], dtype=np.float32)
+    heights = np.array([b.h for b in candidates], dtype=np.float32)
+
+    med_w = float(np.median(widths))
+    med_h = float(np.median(heights))
+
+    x_centers = [b.x + b.w / 2.0 for b in candidates]
+    y_centers = [b.y + b.h / 2.0 for b in candidates]
+
+    detected_cols = cluster_axis(x_centers, med_w * 0.60)
+    detected_rows = cluster_axis(y_centers, med_h * 0.75)
+
+    cols = complete_axis_positions(detected_cols, expected_cols)
+    rows = complete_axis_positions(detected_rows, expected_rows)
+
+    if len(cols) != expected_cols or len(rows) != expected_rows:
+        return candidates, []
+
+    col_spacing = float(np.median(np.diff(cols))) if len(cols) > 1 else med_w
+    row_spacing = float(np.median(np.diff(rows))) if len(rows) > 1 else med_h
+
+    x_tol = max(med_w * 0.60, col_spacing * 0.45)
+    y_tol = max(med_h * 0.90, row_spacing * 0.45)
+
+    occupied = {}
+
+    for b in candidates:
+        cx = b.x + b.w / 2.0
+        cy = b.y + b.h / 2.0
+
+        col_idx = int(np.argmin([abs(cx - c) for c in cols]))
+        row_idx = int(np.argmin([abs(cy - r) for r in rows]))
+
+        if abs(cx - cols[col_idx]) > x_tol:
+            continue
+
+        if abs(cy - rows[row_idx]) > y_tol:
+            continue
+
+        key = (row_idx, col_idx)
+
+        # If duplicate boxes map to the same grid cell, keep the closer one.
+        current = occupied.get(key)
+
+        if current is None:
+            occupied[key] = b
+        else:
+            current_cx = current.x + current.w / 2.0
+            current_cy = current.y + current.h / 2.0
+
+            current_dist = abs(current_cx - cols[col_idx]) + abs(
+                current_cy - rows[row_idx]
+            )
+            new_dist = abs(cx - cols[col_idx]) + abs(cy - rows[row_idx])
+
+            if new_dist < current_dist:
+                occupied[key] = b
+
+    interpolated = []
+
+    for row_idx, cy in enumerate(rows):
+        for col_idx, cx in enumerate(cols):
+            key = (row_idx, col_idx)
+
+            if key in occupied:
+                continue
+
+            fake_box = CandidateBox(
+                int(round(cx - med_w / 2.0)),
+                int(round(cy - med_h / 2.0)),
+                int(round(med_w)),
+                int(round(med_h)),
+            )
+
+            fake_box = normalize_box_to_size(fake_box, med_w, med_h, image_w, image_h)
+
+            overlaps_existing = any(
+                box_iou(fake_box, existing) > INTERPOLATION_MAX_IOU
+                for existing in candidates
+            )
+
+            if not overlaps_existing:
+                candidates.append(fake_box)
+                interpolated.append(fake_box)
+
+    return candidates, interpolated
+
+
 def find_answer_boxes(warped, debug=False):
     image_h, image_w = warped.shape[:2]
 
     gray = cv2.cvtColor(warped, cv2.COLOR_BGR2GRAY)
 
+    # Estimate slow-changing illumination.
+    # Kernel must be much larger than the answer boxes.
+    background = cv2.GaussianBlur(gray, (0, 0), 20)
+    # Divide image by background to flatten shadows / bright streaks
+    normalized = cv2.divide(gray, background, scale=255)  # Improve local contrast
+    # clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    # normalized = clahe.apply(normalized)
+
     if debug:
         annotated = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
 
     th = cv2.adaptiveThreshold(
-        gray,
+        normalized,
         255,
         cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
         cv2.THRESH_BINARY_INV,
@@ -364,6 +559,16 @@ def find_answer_boxes(warped, debug=False):
             for b in passed_candidates
         ]
 
+    # Third pass:
+    # If we detected most boxes, interpolate the missing grid cells.
+    interpolated = []
+
+    candidates, interpolated = interpolate_missing_grid_boxes(
+        candidates,
+        image_w,
+        image_h,
+    )
+
     if len(passed_candidates) >= RECOVERY_MIN_PASSED:
         for b in rectangularity_failures:
             area = b.w * b.h
@@ -411,6 +616,16 @@ def find_answer_boxes(warped, debug=False):
                 cv2.LINE_AA,
             )
 
+        # Draw interpolated boxes in magenta
+        for b in interpolated:
+            cv2.rectangle(
+                annotated,
+                (b.x, b.y),
+                (b.x + b.w, b.y + b.h),
+                (255, 0, 255),
+                2,
+                cv2.LINE_AA,
+            )
         # Draw recovered boxes thicker/yellow-ish
         for b in recovered:
             cv2.rectangle(
@@ -446,6 +661,9 @@ def find_answer_boxes(warped, debug=False):
 
 
 if __name__ == "__main__":
-    img = cv2.imread("dataset/uncompressed/61.jpg")
+    import sys
+
+    img_filename = sys.argv[1]
+    img = cv2.imread(f"dataset/{img_filename}")
     warped = normalise_img(img)
     find_answer_boxes(warped, debug=True)

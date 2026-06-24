@@ -9,6 +9,7 @@ HEIGHT = 555
 
 def normalise_img(img: cv2.typing.MatLike) -> cv2.typing.MatLike | None:
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
     aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
     params = cv2.aruco.DetectorParameters()
     detector = cv2.aruco.ArucoDetector(aruco_dict, params)
@@ -68,7 +69,7 @@ def normalise_img(img: cv2.typing.MatLike) -> cv2.typing.MatLike | None:
 
 
 if __name__ == "__main__":
-    IMG_PATH = "pic2.jpeg"
+    IMG_PATH = "dataset/uncompressed/141_harsh.jpg"
     img = cv2.imread(IMG_PATH)
 
     if img is not None:
