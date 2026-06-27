@@ -15,9 +15,18 @@ DEFAULT_OUTPUT_DIR = Path("dataset")
 DEFAULT_VAL_RATIO = 0.2
 DEFAULT_RANDOM_SEED = 7
 
+IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
+
 LABELS_BY_STEM = {
     "cross_big": "crossed",
     "cross_small": "crossed",
+    "empty": "empty",
+    "scribble": "scribble",
+}
+
+LABELS_BY_DIR = {
+    "cross": "crossed",
+    "crossed": "crossed",
     "empty": "empty",
     "scribble": "scribble",
 }
@@ -32,29 +41,87 @@ class Crop:
     segment_index: int
 
 
+@dataclass(frozen=True)
+class SeedImage:
+    path: Path
+    label: str
+    source: str
+
+
+@dataclass(frozen=True)
+class ExtractionIssue:
+    path: Path
+    label: str
+    reason: str
+
+
 def answer_segment_edges(x, w, segments=5):
     return [int(round(x + (w * i) / float(segments))) for i in range(segments + 1)]
 
 
-def iter_seed_crops(seed_dir):
-    for path in sorted(seed_dir.glob("*")):
-        if path.stem not in LABELS_BY_STEM:
+def source_name(seed_dir, path):
+    return "_".join(path.relative_to(seed_dir).with_suffix("").parts)
+
+
+def iter_seed_images(seed_dir):
+    for path in sorted(seed_dir.rglob("*")):
+        if not path.is_file() or path.suffix.lower() not in IMAGE_EXTENSIONS:
             continue
 
-        label = LABELS_BY_STEM[path.stem]
+        label = None
+        relative_parts = path.relative_to(seed_dir).parts
+
+        if len(relative_parts) > 1:
+            label = LABELS_BY_DIR.get(relative_parts[0])
+
+        if label is None:
+            label = LABELS_BY_STEM.get(path.stem)
+
+        if label is None:
+            continue
+
+        yield SeedImage(path=path, label=label, source=source_name(seed_dir, path))
+
+
+def iter_seed_crops(seed_dir, issues=None):
+    for seed in iter_seed_images(seed_dir):
+        path = seed.path
         img = cv2.imread(str(path))
 
         if img is None:
+            if issues is not None:
+                issues.append(
+                    ExtractionIssue(path, seed.label, "cv2.imread returned None")
+                )
+                continue
             raise RuntimeError(f"Could not read seed image: {path}")
 
-        warped = normalise_img(img)
+        try:
+            warped = normalise_img(img)
+        except Exception as exc:
+            if issues is not None:
+                issues.append(
+                    ExtractionIssue(path, seed.label, f"normalise_img raised {exc!r}")
+                )
+                continue
+            raise
 
         if warped is None:
+            if issues is not None:
+                issues.append(
+                    ExtractionIssue(path, seed.label, "normalise_img returned None")
+                )
+                continue
             raise RuntimeError(f"Could not normalise seed image: {path}")
 
         boxes = find_answer_boxes(warped)
 
         if not boxes:
+            if issues is not None:
+                issues.append(
+                    ExtractionIssue(path, seed.label, "no answer boxes found")
+                )
+                continue
             raise RuntimeError(f"No answer boxes found in seed image: {path}")
 
         for box_index, box in enumerate(boxes):
@@ -73,8 +140,8 @@ def iter_seed_crops(seed_dir):
 
                 yield Crop(
                     image=crop,
-                    label=label,
-                    source=path.stem,
+                    label=seed.label,
+                    source=seed.source,
                     box_index=box_index,
                     segment_index=segment_index,
                 )
@@ -138,9 +205,10 @@ def main():
     if not 0 < args.val_ratio < 1:
         raise ValueError("--val-ratio must be between 0 and 1")
 
+    issues = []
     reset_split_dirs(args.output_dir)
     counts = write_crops(
-        list(iter_seed_crops(args.seed_dir)),
+        list(iter_seed_crops(args.seed_dir, issues)),
         args.output_dir,
         args.val_ratio,
         args.random_seed,
@@ -151,6 +219,16 @@ def main():
 
         for label, count in sorted(counts[split].items()):
             print(f"  {label}: {count}")
+
+    if issues:
+        print("skipped")
+        skipped_by_reason = defaultdict(int)
+
+        for issue in issues:
+            skipped_by_reason[issue.reason] += 1
+
+        for reason, count in sorted(skipped_by_reason.items()):
+            print(f"  {reason}: {count}")
 
 
 if __name__ == "__main__":
