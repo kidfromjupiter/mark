@@ -1,19 +1,12 @@
 import argparse
 from pathlib import Path
-from time import perf_counter
+import sys
 
-from classifier import EMPTY_MODEL_PATH, MARK_MODEL_PATH
-from inference_outputs import (
-    annotated_warped,
-    output_paths_for_result,
-    print_confidence_summary,
-    print_summary,
-    print_timing_summary,
-    show_annotated_warped,
-    write_result_outputs,
-)
-from inference_pipeline import DEFAULT_OPTIONS, InferencePipeline
-from inference_types import InferenceResult, QuestionPrediction, SegmentPrediction
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+
+EMPTY_MODEL_PATH = Path("mcq_empty_classifier.pt")
+MARK_MODEL_PATH = Path("mcq_mark_type_classifier.pt")
 
 
 def parse_args():
@@ -71,13 +64,20 @@ def main():
     if is_batch and not args.no_show:
         raise RuntimeError("Use --no-show when processing multiple images.")
 
-    stage_started_at = perf_counter()
+    from inference_outputs import (
+        output_paths_for_result,
+        print_confidence_summary,
+        print_summary,
+        show_annotated_warped,
+        write_result_outputs,
+    )
+    from inference_pipeline import InferencePipeline
+
     pipeline = InferencePipeline(
         args.empty_model,
         args.mark_model,
         use_cpu=args.cpu,
     )
-    load_model_timing = ("load_model", perf_counter() - stage_started_at)
 
     if is_batch:
         results = pipeline.predict_files(args.images)
@@ -90,10 +90,8 @@ def main():
                 print()
             print(result.image_id)
 
-        timings = [load_model_timing, *result.timings]
         print_summary(result.question_predictions)
         print_confidence_summary(result.question_predictions)
-        print_timing_summary(timings)
 
         if args.output_dir:
             write_result_outputs(
@@ -111,21 +109,6 @@ def main():
     if not args.no_show:
         result = results[0]
         show_annotated_warped(result.warped, result.question_predictions)
-
-
-__all__ = [
-    "DEFAULT_OPTIONS",
-    "InferencePipeline",
-    "InferenceResult",
-    "QuestionPrediction",
-    "SegmentPrediction",
-    "annotated_warped",
-    "main",
-    "output_paths_for_result",
-    "parse_args",
-    "show_annotated_warped",
-    "write_result_outputs",
-]
 
 
 if __name__ == "__main__":

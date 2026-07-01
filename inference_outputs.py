@@ -111,9 +111,3 @@ def print_confidence_summary(question_predictions):
         )
         print(f"{question.question:02d}: {segments}")
 
-
-def print_timing_summary(timings):
-    print("timing")
-
-    for name, seconds in timings:
-        print(f"  {name}: {seconds * 1000.0:.2f} ms")

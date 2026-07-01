@@ -1,6 +1,5 @@
 from dataclasses import dataclass
 from pathlib import Path
-from time import perf_counter
 
 import cv2
 import numpy as np
@@ -32,8 +31,6 @@ class InferencePipeline:
         image_id: str | None
         warped: np.ndarray
         segments: list[dict]
-        timings: list[tuple[str, float]]
-        started_at: float
 
     def __init__(
         self,
@@ -62,12 +59,9 @@ class InferencePipeline:
 
     def predict(self, image_bytes, image_id=None):
         prepared = self._prepare_image(image_bytes, image_id=image_id)
-
-        stage_started_at = perf_counter()
         crop_predictions = self._classify_segments(prepared.segments)
-        classify_timing = perf_counter() - stage_started_at
 
-        return self._build_result(prepared, crop_predictions, classify_timing)
+        return self._build_result(prepared, crop_predictions)
 
     def predict_many(self, images, image_ids=None):
         images = list(images)
@@ -85,14 +79,10 @@ class InferencePipeline:
             for image_bytes, image_id in zip(images, image_ids, strict=True)
         ]
         all_segments = [
-            segment
-            for prepared in prepared_images
-            for segment in prepared.segments
+            segment for prepared in prepared_images for segment in prepared.segments
         ]
 
-        stage_started_at = perf_counter()
         all_crop_predictions = self._classify_segments(all_segments)
-        classify_timing = perf_counter() - stage_started_at
 
         results = []
         prediction_offset = 0
@@ -101,9 +91,7 @@ class InferencePipeline:
             next_offset = prediction_offset + len(prepared.segments)
             crop_predictions = all_crop_predictions[prediction_offset:next_offset]
             prediction_offset = next_offset
-            results.append(
-                self._build_result(prepared, crop_predictions, classify_timing)
-            )
+            results.append(self._build_result(prepared, crop_predictions))
 
         return results
 
@@ -139,28 +127,19 @@ class InferencePipeline:
         )
 
     def _prepare_image(self, image_bytes, image_id=None):
-        timings = []
-        started_at = perf_counter()
-
-        stage_started_at = perf_counter()
         image = self._decode_image(image_bytes)
-        timings.append(("decode_image", perf_counter() - stage_started_at))
 
         source = image_id or "input image"
 
         if image is None:
             raise RuntimeError(f"Could not decode image: {source}")
 
-        stage_started_at = perf_counter()
         warped = normalise_img(image)
-        timings.append(("normalise_image", perf_counter() - stage_started_at))
 
         if warped is None:
             raise RuntimeError(f"Could not normalise image: {source}")
 
-        stage_started_at = perf_counter()
         segments = self._extract_segments(warped)
-        timings.append(("extract_segments", perf_counter() - stage_started_at))
 
         if not segments:
             raise RuntimeError(f"No answer boxes found in image: {source}")
@@ -169,8 +148,6 @@ class InferencePipeline:
             image_id=image_id,
             warped=warped,
             segments=segments,
-            timings=timings,
-            started_at=started_at,
         )
 
     @staticmethod
@@ -322,24 +299,16 @@ class InferencePipeline:
         normalized = (normalized - 0.5) / 0.5
         return torch.from_numpy(normalized).unsqueeze(0)
 
-    def _build_result(self, prepared, crop_predictions, classify_timing):
-        stage_started_at = perf_counter()
+    def _build_result(self, prepared, crop_predictions):
         question_predictions = self._summarize_questions(
             prepared.segments,
             crop_predictions,
         )
-        timings = [
-            *prepared.timings,
-            ("classify_crops", classify_timing),
-            ("summarize", perf_counter() - stage_started_at),
-            ("total_inference", perf_counter() - prepared.started_at),
-        ]
 
         return InferenceResult(
             image_id=prepared.image_id,
             warped=prepared.warped,
             question_predictions=question_predictions,
-            timings=timings,
         )
 
     def _summarize_questions(self, segments, crop_predictions):

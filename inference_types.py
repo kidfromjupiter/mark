@@ -28,7 +28,6 @@ class InferenceResult:
     image_id: str | None
     warped: np.ndarray
     question_predictions: list[QuestionPrediction]
-    timings: list[tuple[str, float]]
 
     @property
     def json_payload(self):

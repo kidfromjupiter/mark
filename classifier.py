@@ -1,4 +1,3 @@
-import argparse
 from pathlib import Path
 
 import torch
@@ -271,23 +270,3 @@ def train(device="cuda", stage="all"):
             **stages[stage_name],
         )
 
-
-def parse_args():
-    parser = argparse.ArgumentParser(description="Train the MCQ mark classifier.")
-    parser.add_argument(
-        "--cpu",
-        action="store_true",
-        help="Train on CPU. By default training uses CUDA.",
-    )
-    parser.add_argument(
-        "--stage",
-        choices=["all", "empty", "mark"],
-        default="all",
-        help="Which stage to train. Defaults to both stages.",
-    )
-    return parser.parse_args()
-
-
-if __name__ == "__main__":
-    args = parse_args()
-    train(device="cpu" if args.cpu else "cuda", stage=args.stage)
