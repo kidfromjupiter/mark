@@ -196,6 +196,47 @@ def cluster_axis(values, merge_gap):
     return [float(np.median(c)) for c in clusters]
 
 
+def sort_grid_boxes(candidates, expected_cols=EXPECTED_GRID_COLS):
+    if not candidates:
+        return []
+
+    if len(candidates) < expected_cols:
+        return sorted(candidates, key=lambda r: (r.x, r.y))
+
+    widths = np.array([b.w for b in candidates], dtype=np.float32)
+    med_w = float(np.median(widths))
+    x_centers = [b.x + b.w / 2.0 for b in candidates]
+    cols = cluster_axis(x_centers, med_w * 0.60)
+
+    if len(cols) == expected_cols:
+        boxes_by_col = {col_idx: [] for col_idx in range(expected_cols)}
+
+        for box in candidates:
+            cx = box.x + box.w / 2.0
+            col_idx = int(np.argmin([abs(cx - col) for col in cols]))
+            boxes_by_col[col_idx].append(box)
+
+        sorted_boxes = []
+
+        for col_idx in range(expected_cols):
+            sorted_boxes.extend(
+                sorted(boxes_by_col[col_idx], key=lambda r: (r.y, r.x))
+            )
+
+        return sorted_boxes
+
+    # Fallback for partial or noisy detections: split by horizontal position
+    # before sorting vertically inside each group.
+    sorted_by_x = sorted(candidates, key=lambda r: r.x + r.w / 2.0)
+    chunks = np.array_split(sorted_by_x, expected_cols)
+    sorted_boxes = []
+
+    for chunk in chunks:
+        sorted_boxes.extend(sorted(chunk.tolist(), key=lambda r: (r.y, r.x)))
+
+    return sorted_boxes
+
+
 def complete_axis_positions(detected_positions, expected_count):
     """
     Converts detected row/column centers into a full expected set of centers.
@@ -657,7 +698,7 @@ def find_answer_boxes(warped, debug=False):
 
         cv2.destroyAllWindows()
 
-    return sorted(candidates, key=lambda r: (r.x, r.y))
+    return sort_grid_boxes(candidates)
 
 
 if __name__ == "__main__":

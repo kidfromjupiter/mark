@@ -7,7 +7,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from detect_squares import find_answer_boxes
+from detect_squares import CandidateBox, find_answer_boxes, sort_grid_boxes
 from warp import normalise_img
 
 DATASET_DIR = ROOT / "dataset/compressed/good/"
@@ -17,6 +17,31 @@ CROSSED_COLORED_DATASET_DIR = ROOT / "dataset/compressed/crossed_and_colored_mes
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
 EXPECTED_BOX_COUNT = 50
+
+
+def test_sort_grid_boxes_orders_down_each_column_before_next_column():
+    boxes = [
+        CandidateBox(44, 157, 99, 19),
+        CandidateBox(44, 190, 99, 19),
+        CandidateBox(44, 224, 99, 19),
+        CandidateBox(44, 256, 99, 19),
+        CandidateBox(44, 289, 99, 19),
+        CandidateBox(44, 322, 99, 19),
+        CandidateBox(44, 356, 99, 19),
+        CandidateBox(44, 388, 99, 19),
+        CandidateBox(44, 422, 99, 19),
+        CandidateBox(44, 455, 99, 19),
+        CandidateBox(203, 454, 99, 19),
+        CandidateBox(204, 158, 99, 19),
+        CandidateBox(204, 191, 99, 19),
+    ]
+
+    sorted_boxes = sort_grid_boxes(boxes, expected_cols=2)
+
+    assert sorted_boxes[9].x == 44
+    assert sorted_boxes[9].y == 455
+    assert sorted_boxes[10].x == 204
+    assert sorted_boxes[10].y == 158
 
 
 def dataset_images():
